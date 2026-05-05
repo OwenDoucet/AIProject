@@ -1,5 +1,13 @@
 fastapi
-uvicorn
-fastapi-cors
-openai
+uvicorn[standard]
+python-dotenv
+pydantic
+langchain
+langchain-core
+langchain-community
+langchain-classic
+langchain-chroma
+langchain-google-genai
+langchain-groq
+langchain-text-splitters
 chromadb
