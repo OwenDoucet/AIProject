@@ -54,10 +54,13 @@ function App() {
   }, [bootLines]);
 
   // Clock
+  // Clock (Local Time)
   useEffect(() => {
     const tick = () => {
       const now = new Date();
-      setClock(now.toISOString().replace('T', ' ').slice(0, 19));
+      // sv-SE gives us the YYYY-MM-DD HH:mm:ss format perfectly in local time
+      const localTime = now.toLocaleString('sv-SE', { timeZoneName: 'short' }).slice(0, 19);
+      setClock(localTime);
     };
     tick();
     const id = setInterval(tick, 1000);
