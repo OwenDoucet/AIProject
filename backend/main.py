@@ -31,19 +31,22 @@ groq_api_key: SecretStr = SecretStr(raw_groq_key)
 
 app = FastAPI()
 
+# Cloud-ready CORS: Allow all origins for the demo
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
+    allow_origins=["*"], 
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-BASE_DIR = Path(__file__).resolve().parent
+# Render Persistence Logic: Use /data if STORAGE_DIR is set, otherwise use local path
+STORAGE_PATH = os.getenv("STORAGE_DIR", str(Path(__file__).resolve().parent))
+BASE_DIR = Path(STORAGE_PATH)
 UPLOAD_DIR = BASE_DIR / "uploaded_projects"
-UPLOAD_DIR.mkdir(exist_ok=True)
+UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
-# Using the most efficient model found in your terminal check
+# Optimized Gemini Model
 embeddings = GoogleGenerativeAIEmbeddings(
     model="models/gemini-embedding-2",
     api_key=google_api_key,
@@ -53,13 +56,17 @@ embeddings = GoogleGenerativeAIEmbeddings(
 class QueryRequest(BaseModel):
     text: str
 
+@app.get("/")
+async def health_check():
+    return {"status": "Backend is live", "storage": str(BASE_DIR)}
+
 @app.post("/api/upload")
 async def upload_codebase(file: UploadFile = File(...)):
     try:
         gc.collect()
         if UPLOAD_DIR.exists():
             shutil.rmtree(UPLOAD_DIR)
-        UPLOAD_DIR.mkdir()
+        UPLOAD_DIR.mkdir(parents=True)
 
         for old_folder in BASE_DIR.glob("chroma_db_*"):
             shutil.rmtree(old_folder, ignore_errors=True)
@@ -71,7 +78,7 @@ async def upload_codebase(file: UploadFile = File(...)):
         with zipfile.ZipFile(zip_path, 'r') as zip_ref:
             zip_ref.extractall(UPLOAD_DIR)
             
-        return {"message": "Project uploaded."}
+        return {"message": "Project uploaded successfully."}
     except Exception as e:
         return {"message": f"Upload error: {str(e)}"}
 
@@ -109,10 +116,10 @@ async def index_codebase():
         for folder in BASE_DIR.glob("chroma_db_*"):
             shutil.rmtree(folder, ignore_errors=True)
         
-        time.sleep(1.0)
+        time.sleep(0.5)
         unique_id = uuid.uuid4().hex[:8]
         new_path = BASE_DIR / f"chroma_db_{unique_id}"
-        new_path.mkdir(exist_ok=True)
+        new_path.mkdir(parents=True, exist_ok=True)
 
         documents = []
         ignore = {"node_modules", "venv", "__pycache__", ".git", "dist", "project.zip"}
@@ -130,24 +137,22 @@ async def index_codebase():
 
         if not documents: return {"message": "No valid files found."}
 
-        text_splitter = RecursiveCharacterTextSplitter(chunk_size=2000, chunk_overlap=200)
+        # Large chunks = fewer packages to index = faster speed
+        text_splitter = RecursiveCharacterTextSplitter(chunk_size=6000, chunk_overlap=200)
         split_docs = text_splitter.split_documents(documents)
         safe_docs = [d for d in split_docs if d.page_content.strip()]
 
         client = chromadb.PersistentClient(path=str(new_path))
-        
-        # We manually initialize the collection to avoid LangChain's 'from_documents'
         collection = client.get_or_create_collection(name="code_index")
         
         chunks_indexed = 0
-        LIMIT_CHUNKS = 30 
+        LIMIT_CHUNKS = 10 # Speed limit for snappy indexing
 
         for doc in safe_docs:
             if chunks_indexed >= LIMIT_CHUNKS:
                 break
 
-            # MANUALLY generate the embedding to bypass the library bug
-            # This is the "Nuke" fix.
+            # Manual embedding generation to prevent the IndexError bug
             vector = embeddings.embed_query(doc.page_content)
             
             collection.add(
@@ -159,10 +164,10 @@ async def index_codebase():
             
             chunks_indexed += 1
             print(f"Indexed {chunks_indexed}/{LIMIT_CHUNKS}: {doc.metadata['source']}")
-            time.sleep(0.5) 
+            time.sleep(0.2) 
 
         gc.collect()
-        return {"message": f"Successfully indexed {chunks_indexed} chunks manually."}
+        return {"message": f"Quick scan complete: {chunks_indexed} chunks indexed."}
     except Exception as e:
         print(traceback.format_exc())
         return {"message": f"Index failed: {str(e)}"}

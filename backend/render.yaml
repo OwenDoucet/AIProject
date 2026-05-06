@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: code-ai-backend
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: GOOGLE_API_KEY
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      - key: STORAGE_DIR
+        value: /data
+    disk:
+      name: chroma-storage
+      mountPath: /data
+      sizeGB: 1
