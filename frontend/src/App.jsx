@@ -558,7 +558,7 @@ function App() {
             nodeRelSize={7}
             nodeColor={node => node.group === 1 ? '#00c8ff' : '#7b2fff'}
             nodeOpacity={0.92}
-            linkColor={() => 'rgba(0,200,255,0.18)'}
+            linkColor={() => 'rgba(0, 200, 255, 0.89)'}
             linkWidth={0.8}
             linkDirectionalParticles={3}
           />
