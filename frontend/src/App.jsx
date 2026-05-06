@@ -1,6 +1,9 @@
 import { useEffect, useState, useRef } from 'react';
 import ForceGraph3D from 'react-force-graph-3d';
 
+// Centralized API Base URL for Render
+const API_BASE = "https://codebasecartographer.onrender.com";
+
 function App() {
   const [graphData, setGraphData] = useState({ nodes: [], links: [] });
   const [isIndexing, setIsIndexing] = useState(false);
@@ -17,42 +20,38 @@ function App() {
   const typeIntervalRef = useRef(null);
   const fileInputRef = useRef(null);
   const outputRef = useRef(null);
+  const scrollRef = useRef(null);
 
   // Boot sequence
-  const scrollRef = useRef(null); // Add this ref at the top of your component
+  useEffect(() => {
+    const lines = [
+      '> CARTOGRAPHER OS v1.0 — INITIALIZING...',
+      '> LOADING NEURAL ENGINE: GROQ LLAMA-3.3-70B',
+      '> EMBEDDING MODULE: GEMINI-001 ONLINE',
+      '> CHROMADB VECTOR STORE: READY',
+      '> SCANNING FILESYSTEM...',
+      '> ALL SYSTEMS NOMINAL. STANDING BY.',
+    ];
 
-// Boot sequence
-useEffect(() => {
-  const lines = [
-    '> CARTOGRAPHER OS v1.0 — INITIALIZING...',
-    '> LOADING NEURAL ENGINE: GROQ LLAMA-3.3-70B',
-    '> EMBEDDING MODULE: GEMINI-001 ONLINE',
-    '> CHROMADB VECTOR STORE: READY',
-    '> SCANNING FILESYSTEM...',
-    '> ALL SYSTEMS NOMINAL. STANDING BY.',
-  ];
+    let index = 0;
+    const interval = setInterval(() => {
+      if (index < lines.length) {
+        setBootLines(prev => [...prev, lines[index]]);
+        index++;
+      } else {
+        clearInterval(interval);
+        setTimeout(() => setBooted(true), 800);
+      }
+    }, 400);
 
-  let index = 0;
-  const interval = setInterval(() => {
-    if (index < lines.length) {
-      setBootLines(prev => [...prev, lines[index]]);
-      index++;
-    } else {
-      clearInterval(interval);
-      // Brief pause at the end for "dramatic effect"
-      setTimeout(() => setBooted(true), 800);
+    return () => clearInterval(interval);
+  }, []);
+
+  useEffect(() => {
+    if (scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
-  }, 400); // Slightly slower for better readability
-
-  return () => clearInterval(interval);
-}, []);
-
-// Auto-scroll logic: Whenever bootLines updates, scroll to bottom
-useEffect(() => {
-  if (scrollRef.current) {
-    scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-  }
-}, [bootLines]);
+  }, [bootLines]);
 
   // Clock
   useEffect(() => {
@@ -81,9 +80,10 @@ useEffect(() => {
   }, [typedText]);
 
   const fetchGraph = () => {
-    fetch('http://127.0.0.1:8000/api/graph')
+    fetch(`${API_BASE}/api/graph`)
       .then(res => res.json())
-      .then(data => setGraphData(data));
+      .then(data => setGraphData(data))
+      .catch(err => console.error("Graph fetch failed:", err));
   };
 
   useEffect(() => {
@@ -128,7 +128,7 @@ useEffect(() => {
     const formData = new FormData();
     formData.append('file', file);
     try {
-      await fetch('http://127.0.0.1:8000/api/upload', { method: 'POST', body: formData });
+      await fetch(`${API_BASE}/api/upload`, { method: 'POST', body: formData });
       setIsUploading(false);
       typeText('UPLOAD COMPLETE. Codebase ingested. Ready for indexing.');
       fetchGraph();
@@ -142,10 +142,15 @@ useEffect(() => {
     setIsIndexing(true);
     triggerGlitch();
     typeText('Scanning codebase... chunking files... embedding vectors... building neural index...');
-    await fetch('http://127.0.0.1:8000/api/index', { method: 'POST' });
-    setIsIndexing(false);
-    fetchGraph();
-    typeText('NEURAL INDEX COMPLETE. All nodes are queryable. Click any node to begin analysis.');
+    try {
+      await fetch(`${API_BASE}/api/index`, { method: 'POST' });
+      setIsIndexing(false);
+      fetchGraph();
+      typeText('NEURAL INDEX COMPLETE. All nodes are queryable. Click any node to begin analysis.');
+    } catch {
+      setIsIndexing(false);
+      typeText('ERROR: Indexing sequence failed.');
+    }
   };
 
   const handleNodeClick = async (node) => {
@@ -162,14 +167,19 @@ useEffect(() => {
       1200
     );
 
-    const res = await fetch('http://127.0.0.1:8000/api/query', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text: `Explain the code logic in ${node.id} and how it fits into the project.` })
-    });
-    const data = await res.json();
-    setIsAnalyzing(false);
-    typeText(data.response);
+    try {
+      const res = await fetch(`${API_BASE}/api/query`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: `Explain the code logic in ${node.id} and how it fits into the project.` })
+      });
+      const data = await res.json();
+      setIsAnalyzing(false);
+      typeText(data.response);
+    } catch {
+      setIsAnalyzing(false);
+      typeText('ERROR: Analysis query failed.');
+    }
   };
 
   const pyCount = graphData.nodes.filter(n => n.group === 1).length;
@@ -202,7 +212,6 @@ useEffect(() => {
 
         html, body { height: 100%; overflow: hidden; background: var(--bg); }
 
-        /* ── BOOT SCREEN ── */
         .boot-screen {
           position: fixed; inset: 0; background: var(--bg);
           display: flex; flex-direction: column;
@@ -218,13 +227,10 @@ useEffect(() => {
           text-shadow: 0 0 30px rgba(0,200,255,0.8), 0 0 60px rgba(0,200,255,0.3);
           margin-bottom: 32px;
         }
-        .boot-line { font-size: 11px; letter-spacing: 1px; opacity: 0; animation: fadeIn 0.3s forwards; }
-        @keyframes fadeIn { to { opacity: 1; } }
         .boot-bar-wrap { width: 400px; height: 2px; background: rgba(0,200,255,0.1); margin-top: 24px; overflow: hidden; }
         .boot-bar { height: 100%; background: var(--glow); animation: bootFill 2s ease-out forwards; }
         @keyframes bootFill { from { width: 0; } to { width: 100%; } }
 
-        /* ── SHELL ── */
         .app-shell {
           height: 100vh; width: 100vw;
           display: flex; font-family: var(--body);
@@ -233,7 +239,6 @@ useEffect(() => {
         }
         .app-shell.visible { opacity: 1; }
 
-        /* ── BACKGROUNDS ── */
         .grid-bg {
           position: fixed; inset: 0; pointer-events: none; z-index: 0;
           background-image:
@@ -260,7 +265,6 @@ useEffect(() => {
           100% { transform: translateY(-10vh) scale(1.2); opacity: 0; }
         }
 
-        /* ── GLITCH OVERLAY ── */
         .glitch-overlay {
           position: fixed; inset: 0; pointer-events: none; z-index: 100;
           opacity: 0; transition: opacity 0.05s;
@@ -282,7 +286,6 @@ useEffect(() => {
           20%,60% { opacity: 1; }
         }
 
-        /* ── SIDEBAR ── */
         .sidebar {
           width: 360px; min-width: 360px;
           background: var(--panel);
@@ -291,7 +294,6 @@ useEffect(() => {
           z-index: 10; position: relative; overflow: hidden;
         }
 
-        /* Top sweep line */
         .sidebar::after {
           content: ''; position: absolute; top: 0; left: -100%; right: 100%; height: 1px;
           background: linear-gradient(90deg, transparent, var(--glow), transparent);
@@ -302,7 +304,6 @@ useEffect(() => {
           100% { left: 100%;  right: -100%; }
         }
 
-        /* ── HEADER ── */
         .sidebar-header {
           padding: 22px 20px 18px;
           border-bottom: 1px solid var(--border);
@@ -346,7 +347,6 @@ useEffect(() => {
           color: rgba(0,200,255,0.3); letter-spacing: 1px;
         }
 
-        /* ── STATS ── */
         .stats-row {
           display: grid; grid-template-columns: 1fr 1fr 1fr;
           border-bottom: 1px solid var(--border);
@@ -356,12 +356,6 @@ useEffect(() => {
           border-right: 1px solid var(--border);
         }
         .stat-cell:last-child { border-right: none; }
-        .stat-cell::before {
-          content: ''; position: absolute; bottom: 0; left: 20%; right: 20%; height: 1px;
-          background: var(--glow); opacity: 0; transform: scaleX(0);
-          transition: opacity 0.3s, transform 0.3s;
-        }
-        .stat-cell:hover::before { opacity: 0.5; transform: scaleX(1); }
         .stat-value {
           font-family: var(--display); font-size: 22px; font-weight: 700;
           color: var(--glow); text-shadow: 0 0 12px rgba(0,200,255,0.5);
@@ -373,7 +367,6 @@ useEffect(() => {
           display: block; margin-top: 4px;
         }
 
-        /* ── CONTROLS ── */
         .controls { padding: 16px 20px; display: flex; flex-direction: column; gap: 10px; border-bottom: 1px solid var(--border); }
 
         .upload-zone {
@@ -385,12 +378,6 @@ useEffect(() => {
           text-align: center; transition: all 0.25s; position: relative;
           overflow: hidden;
         }
-        .upload-zone::before {
-          content: ''; position: absolute; inset: 0;
-          background: rgba(123,47,255,0.08); transform: scaleX(0);
-          transform-origin: left; transition: transform 0.25s;
-        }
-        .upload-zone:hover::before { transform: scaleX(1); }
         .upload-zone:hover {
           border-color: rgba(123,47,255,0.7);
           color: #b060ff;
@@ -407,34 +394,19 @@ useEffect(() => {
           position: relative; overflow: hidden; transition: all 0.25s;
           clip-path: polygon(10px 0%, 100% 0%, calc(100% - 10px) 100%, 0% 100%);
         }
-        .index-btn::before {
-          content: ''; position: absolute; inset: 0;
-          background: linear-gradient(90deg, rgba(0,200,255,0.08), transparent);
-          transform: translateX(-100%); transition: transform 0.4s;
-        }
-        .index-btn:hover::before { transform: translateX(0); }
         .index-btn:hover {
           border-color: var(--glow);
-          box-shadow: 0 0 20px rgba(0,200,255,0.25), inset 0 0 12px rgba(0,200,255,0.05);
+          box-shadow: 0 0 20px rgba(0,200,255,0.25);
           text-shadow: 0 0 10px rgba(0,200,255,0.9);
         }
         .index-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-        .index-btn.loading {
-          border-color: rgba(0,200,255,0.4); color: rgba(0,200,255,0.6);
-          animation: loadPulse 1.2s ease-in-out infinite;
-        }
-        @keyframes loadPulse {
-          0%,100% { box-shadow: 0 0 8px rgba(0,200,255,0.1); }
-          50%      { box-shadow: 0 0 24px rgba(0,200,255,0.4); }
-        }
         .progress-bar {
           position: absolute; bottom: 0; left: 0; height: 2px;
           background: linear-gradient(90deg, var(--glow2), var(--glow));
           animation: progAnim 2s ease-in-out infinite;
         }
-        @keyframes progAnim { 0% { width:0; } 60% { width:75%; } 100% { width:100%; } }
+        @keyframes progAnim { 0% { width:0; } 100% { width:100%; } }
 
-        /* ── ACTIVE NODE ── */
         .active-node-bar {
           margin: 0 20px 0;
           padding: 9px 12px;
@@ -443,19 +415,8 @@ useEffect(() => {
           border-left: 3px solid var(--glow);
           display: flex; align-items: center; gap: 8px;
           font-family: var(--mono); font-size: 11px; color: var(--glow);
-          overflow: hidden;
-        }
-        .active-node-bar .arrow { color: rgba(0,200,255,0.4); flex-shrink: 0; }
-        .active-node-name {
-          flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-        }
-        .analyzing-pill {
-          flex-shrink: 0; font-size: 8px; padding: 2px 7px; letter-spacing: 1.5px;
-          background: rgba(0,200,255,0.1); border: 1px solid rgba(0,200,255,0.3);
-          animation: dotPulse 1s ease-in-out infinite;
         }
 
-        /* ── AI PANEL ── */
         .ai-panel {
           flex: 1; margin: 12px 20px 20px;
           border: 1px solid var(--border);
@@ -463,171 +424,76 @@ useEffect(() => {
           display: flex; flex-direction: column;
           overflow: hidden; position: relative;
         }
-        .ai-panel::before, .ai-panel::after {
-          content: ''; position: absolute;
-          width: 10px; height: 10px; pointer-events: none;
-        }
-        .ai-panel::before {
-          top: -1px; left: -1px;
-          border-top: 2px solid var(--glow); border-left: 2px solid var(--glow);
-        }
-        .ai-panel::after {
-          bottom: -1px; right: -1px;
-          border-bottom: 2px solid var(--glow); border-right: 2px solid var(--glow);
-        }
         .ai-header {
           padding: 9px 14px; border-bottom: 1px solid var(--border);
           background: rgba(0,200,255,0.03);
           display: flex; align-items: center; justify-content: space-between;
-          flex-shrink: 0;
         }
         .ai-title {
           font-family: var(--mono); font-size: 9px;
           letter-spacing: 2px; color: rgba(0,200,255,0.55);
-          display: flex; align-items: center; gap: 6px;
-        }
-        .ai-title-dot { color: var(--glow); }
-        .model-badge {
-          font-family: var(--mono); font-size: 8px; padding: 1px 6px;
-          border: 1px solid rgba(123,47,255,0.35); color: rgba(123,47,255,0.65);
-          letter-spacing: 1px;
         }
         .ai-output {
           flex: 1; padding: 14px 16px;
           overflow-y: auto;
           font-family: var(--mono); font-size: 11.5px; line-height: 1.9;
           color: var(--text2);
-          scrollbar-width: thin; scrollbar-color: rgba(0,200,255,0.15) transparent;
         }
-        .ai-output::-webkit-scrollbar { width: 3px; }
-        .ai-output::-webkit-scrollbar-thumb { background: rgba(0,200,255,0.2); }
-        .placeholder { color: rgba(138,180,200,0.25); line-height: 2.2; }
-        .placeholder span { display: block; }
         .cursor {
           display: inline-block; width: 7px; height: 13px;
           background: var(--glow); margin-left: 2px; vertical-align: middle;
-          box-shadow: 0 0 6px var(--glow);
           animation: blink 0.75s step-end infinite;
         }
         @keyframes blink { 50% { opacity: 0; } }
 
-        /* ── GRAPH ── */
         .graph-area { flex: 1; position: relative; overflow: hidden; }
-
         .hud-top {
           position: absolute; top: 18px; left: 50%;
           transform: translateX(-50%);
           z-index: 10; font-family: var(--mono); font-size: 9px;
-          color: rgba(0,200,255,0.2); letter-spacing: 2.5px; text-transform: uppercase;
-          white-space: nowrap; pointer-events: none;
+          color: rgba(0,200,255,0.2); letter-spacing: 2.5px;
         }
-
-        .hud-tr {
-          position: absolute; top: 18px; right: 18px; z-index: 10;
-          font-family: var(--mono); font-size: 9px; line-height: 2;
-          color: rgba(0,200,255,0.25); text-align: right; pointer-events: none;
-        }
-        .hud-tr .hi { color: rgba(0,200,255,0.5); }
-
-        .hud-bl {
-          position: absolute; bottom: 18px; left: 18px; z-index: 10;
-          font-family: var(--mono); font-size: 8px; line-height: 2;
-          color: rgba(0,200,255,0.15); pointer-events: none; letter-spacing: 1px;
-        }
-
-        .hud-br {
-          position: absolute; bottom: 18px; right: 18px; z-index: 10;
-          font-family: var(--mono); font-size: 9px;
-          color: rgba(0,200,255,0.2); pointer-events: none; letter-spacing: 1px;
-        }
-
-        /* Corner brackets on graph */
-        .corner { position: absolute; width: 16px; height: 16px; z-index: 5; pointer-events: none; }
-        .corner.tl { top: 14px; left: 14px; border-top: 1px solid rgba(0,200,255,0.2); border-left: 1px solid rgba(0,200,255,0.2); }
-        .corner.tr { top: 14px; right: 14px; border-top: 1px solid rgba(0,200,255,0.2); border-right: 1px solid rgba(0,200,255,0.2); }
-        .corner.bl { bottom: 14px; left: 14px; border-bottom: 1px solid rgba(0,200,255,0.2); border-left: 1px solid rgba(0,200,255,0.2); }
-        .corner.br { bottom: 14px; right: 14px; border-bottom: 1px solid rgba(0,200,255,0.2); border-right: 1px solid rgba(0,200,255,0.2); }
 
         .boot-lines-container {
-  width: 100%;
-  max-height: 250px; /* Adjust based on your logo/bar spacing */
-  overflow-y: auto;
-  margin: 20px 0;
-  display: flex;
-  flex-direction: column;
-  scrollbar-width: none;
-}
-
-.boot-lines-inner {
-  margin: 0 auto; /* Centers the block itself */
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start; /* Keeps the '>' symbols aligned vertically */
-  text-align: left; /* Standard terminal look */
-}
-
-.boot-line {
-  font-family: 'Courier New', Courier, monospace;
-  color: #13b9c5;
-  margin-bottom: 8px;
-  white-space: nowrap; /* Prevents lines from wrapping and breaking alignment */
-  opacity: 0;
-  transform: translateY(5px);
-  animation: lineIn 0.2s ease-out forwards;
-}
-
-@keyframes lineIn {
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
+          width: 100%; max-height: 250px; overflow-y: auto; margin: 20px 0;
+          display: flex; flex-direction: column; scrollbar-width: none;
+        }
+        .boot-lines-inner { margin: 0 auto; display: flex; flex-direction: column; align-items: flex-start; }
+        .boot-line {
+          font-family: 'Courier New', Courier, monospace; color: #13b9c5;
+          margin-bottom: 8px; white-space: nowrap; opacity: 0;
+          animation: lineIn 0.2s ease-out forwards;
+        }
+        @keyframes lineIn { to { opacity: 1; } }
       `}</style>
 
       {/* Boot screen */}
       <div className={`boot-screen ${booted ? 'hidden' : ''}`}>
-  <div className="boot-logo">CODEBASE CARTOGRAPHER</div>
-  
-  <div className="boot-lines-container" ref={scrollRef}>
-    {/* This inner div ensures everything stays centered */}
-    <div className="boot-lines-inner">
-      {bootLines.map((l, i) => (
-        <div key={i} className="boot-line">
-          {l}
+        <div className="boot-logo">CODEBASE CARTOGRAPHER</div>
+        <div className="boot-lines-container" ref={scrollRef}>
+          <div className="boot-lines-inner">
+            {bootLines.map((l, i) => (
+              <div key={i} className="boot-line">{l}</div>
+            ))}
+          </div>
         </div>
-      ))}
-    </div>
-  </div>
+        <div className="boot-bar-wrap"><div className="boot-bar" /></div>
+      </div>
 
-  <div className="boot-bar-wrap">
-    <div className="boot-bar" />
-  </div>
-</div>
-
-
-      {/* Glitch overlay */}
       <div className={`glitch-overlay ${glitchActive ? 'active' : ''}`} />
 
       <div className={`app-shell ${booted ? 'visible' : ''}`}>
-        <div className="grid-bg" />
-        <div className="vignette" />
-        <div className="scanline" />
+        <div className="grid-bg" /><div className="vignette" /><div className="scanline" />
 
         {particles.map(p => (
           <div key={p.id} className="particle" style={{
-            left: `${p.x}%`,
-            width: `${p.size}px`, height: `${p.size}px`,
-            background: p.color,
-            opacity: 0.35,
-            animationDuration: `${p.duration}s`,
-            animationDelay: `${p.delay}s`,
+            left: `${p.x}%`, width: `${p.size}px`, height: `${p.size}px`,
+            background: p.color, opacity: 0.35,
+            animationDuration: `${p.duration}s`, animationDelay: `${p.delay}s`,
           }} />
         ))}
 
-        {/* ── SIDEBAR ── */}
         <div className="sidebar">
-
-          {/* Header */}
           <div className="sidebar-header">
             <div className="header-top">
               <span className="app-title">CARTOGRAPHER</span>
@@ -635,98 +501,44 @@ useEffect(() => {
             </div>
             <div className="header-sub">neural code analysis system</div>
             <div className="status-row">
-              <div className="status-online">
-                <div className="dot" /> SYSTEM ONLINE
-              </div>
+              <div className="status-online"><div className="dot" /> SYSTEM ONLINE</div>
               <div className="clock">{clock}</div>
             </div>
           </div>
 
-          {/* Stats */}
           <div className="stats-row">
-            <div className="stat-cell">
-              <span className="stat-value">{graphData.nodes.length}</span>
-              <span className="stat-label">Total</span>
-            </div>
-            <div className="stat-cell">
-              <span className="stat-value" style={{ color: 'var(--glow)' }}>{pyCount}</span>
-              <span className="stat-label">Python</span>
-            </div>
-            <div className="stat-cell">
-              <span className="stat-value" style={{ color: 'var(--glow2)' }}>{jsCount}</span>
-              <span className="stat-label">JS/JSX</span>
-            </div>
+            <div className="stat-cell"><span className="stat-value">{graphData.nodes.length}</span><span className="stat-label">Total</span></div>
+            <div className="stat-cell"><span className="stat-value">{pyCount}</span><span className="stat-label">Python</span></div>
+            <div className="stat-cell"><span className="stat-value">{jsCount}</span><span className="stat-label">JS/JSX</span></div>
           </div>
 
-          {/* Controls */}
           <div className="controls">
             <input type="file" ref={fileInputRef} onChange={handleFileUpload} style={{ display: 'none' }} accept=".zip" />
             <div className="upload-zone" onClick={() => fileInputRef.current.click()}>
               {isUploading ? '⇪  UPLOADING...' : '⇪  UPLOAD CODEBASE  (.ZIP)'}
             </div>
-            <button
-              className={`index-btn ${isIndexing ? 'loading' : ''}`}
-              onClick={handleIndex}
-              disabled={isIndexing || isUploading}
-            >
-              {isIndexing ? '◈  INDEXING CODEBASE...' : '◈  SCAN & INDEX'}
+            <button className={`index-btn ${isIndexing ? 'loading' : ''}`} onClick={handleIndex} disabled={isIndexing || isUploading}>
+              {isIndexing ? '◈  INDEXING...' : '◈  SCAN & INDEX'}
               {isIndexing && <div className="progress-bar" />}
             </button>
           </div>
 
-          {/* Active node */}
           {activeNode && (
             <div className="active-node-bar" style={{ margin: '0 20px 12px' }}>
-              <span className="arrow">▶</span>
-              <span className="active-node-name">{activeNode}</span>
-              {isAnalyzing && <span className="analyzing-pill">ANALYZING</span>}
+              <span className="arrow">▶</span><span className="active-node-name">{activeNode}</span>
             </div>
           )}
 
-          {/* AI output */}
           <div className="ai-panel">
-            <div className="ai-header">
-              <div className="ai-title">
-                <span className="ai-title-dot">◆</span> NEURAL OUTPUT
-              </div>
-              <div className="model-badge">LLAMA-3.3-70B</div>
-            </div>
+            <div className="ai-header"><div className="ai-title">◆ NEURAL OUTPUT</div></div>
             <div className="ai-output" ref={outputRef}>
-              {typedText ? (
-                <>{typedText}<span className="cursor" /></>
-              ) : (
-                <div className="placeholder">
-                  <span>&gt; awaiting node selection...</span>
-                  <span>&gt; click any node to begin analysis</span>
-                  <span style={{ marginTop: '8px', color: 'rgba(0,200,255,0.12)' }}>&gt; use scan &amp; index first</span>
-                </div>
-              )}
+              {typedText ? <>{typedText}<span className="cursor" /></> : <div className="placeholder">&gt; awaiting node selection...</div>}
             </div>
           </div>
         </div>
 
-        {/* ── GRAPH ── */}
         <div className="graph-area">
-          <div className="corner tl" /><div className="corner tr" />
-          <div className="corner bl" /><div className="corner br" />
-
           <div className="hud-top">3D NEURAL MAP — DRAG · SCROLL · CLICK</div>
-
-          <div className="hud-tr">
-            <div><span className="hi">ENGINE</span> GROQ / LLAMA-3.3</div>
-            <div><span className="hi">EMBED</span> GEMINI-001</div>
-            <div><span className="hi">DATABASE</span> CHROMADB</div>
-          </div>
-
-          <div className="hud-bl">
-            SYS://CARTOGRAPHER/NEURAL-GRAPH<br />
-            RENDER: 3D-FORCE-GRAPH — WebGL
-          </div>
-
-          <div className="hud-br">
-            {graphData.nodes.length} NODES MAPPED
-          </div>
-
           <ForceGraph3D
             ref={fgRef}
             graphData={graphData}
@@ -739,9 +551,6 @@ useEffect(() => {
             linkColor={() => 'rgba(0,200,255,0.18)'}
             linkWidth={0.8}
             linkDirectionalParticles={3}
-            linkDirectionalParticleWidth={1.5}
-            linkDirectionalParticleSpeed={0.004}
-            linkDirectionalParticleColor={() => '#ffffff'}
           />
         </div>
       </div>
