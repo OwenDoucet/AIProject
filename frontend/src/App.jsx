@@ -3,32 +3,108 @@ import ForceGraph3D from 'react-force-graph-3d';
 
 function App() {
   const [graphData, setGraphData] = useState({ nodes: [], links: [] });
-  const [aiResponse, setAiResponse] = useState("");
   const [isIndexing, setIsIndexing] = useState(false);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [isUploading, setIsUploading] = useState(false);
   const [activeNode, setActiveNode] = useState(null);
   const [typedText, setTypedText] = useState("");
   const [particles, setParticles] = useState([]);
+  const [bootLines, setBootLines] = useState([]);
+  const [booted, setBooted] = useState(false);
+  const [clock, setClock] = useState('');
+  const [glitchActive, setGlitchActive] = useState(false);
+  const fgRef = useRef();
   const typeIntervalRef = useRef(null);
+  const fileInputRef = useRef(null);
+  const outputRef = useRef(null);
 
+  // Boot sequence
+  const scrollRef = useRef(null); // Add this ref at the top of your component
+
+// Boot sequence
+useEffect(() => {
+  const lines = [
+    '> CARTOGRAPHER OS v1.0 — INITIALIZING...',
+    '> LOADING NEURAL ENGINE: GROQ LLAMA-3.3-70B',
+    '> EMBEDDING MODULE: GEMINI-001 ONLINE',
+    '> CHROMADB VECTOR STORE: READY',
+    '> SCANNING FILESYSTEM...',
+    '> ALL SYSTEMS NOMINAL. STANDING BY.',
+  ];
+
+  let index = 0;
+  const interval = setInterval(() => {
+    if (index < lines.length) {
+      setBootLines(prev => [...prev, lines[index]]);
+      index++;
+    } else {
+      clearInterval(interval);
+      // Brief pause at the end for "dramatic effect"
+      setTimeout(() => setBooted(true), 800);
+    }
+  }, 400); // Slightly slower for better readability
+
+  return () => clearInterval(interval);
+}, []);
+
+// Auto-scroll logic: Whenever bootLines updates, scroll to bottom
+useEffect(() => {
+  if (scrollRef.current) {
+    scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+  }
+}, [bootLines]);
+
+  // Clock
   useEffect(() => {
+    const tick = () => {
+      const now = new Date();
+      setClock(now.toISOString().replace('T', ' ').slice(0, 19));
+    };
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, []);
+
+  // Graph force config
+  useEffect(() => {
+    if (fgRef.current) {
+      fgRef.current.d3Force('charge')?.strength(-80);
+      fgRef.current.d3Force('link')?.distance(25);
+    }
+  }, [graphData]);
+
+  // Auto-scroll output
+  useEffect(() => {
+    if (outputRef.current) {
+      outputRef.current.scrollTop = outputRef.current.scrollHeight;
+    }
+  }, [typedText]);
+
+  const fetchGraph = () => {
     fetch('http://127.0.0.1:8000/api/graph')
       .then(res => res.json())
       .then(data => setGraphData(data));
+  };
 
-    // Generate floating particles
-    const pts = Array.from({ length: 30 }, (_, i) => ({
+  useEffect(() => {
+    fetchGraph();
+    const pts = Array.from({ length: 40 }, (_, i) => ({
       id: i,
       x: Math.random() * 100,
       y: Math.random() * 100,
-      size: Math.random() * 3 + 1,
-      duration: Math.random() * 8 + 4,
-      delay: Math.random() * 5,
+      size: Math.random() * 2.5 + 0.5,
+      duration: Math.random() * 10 + 6,
+      delay: Math.random() * 8,
+      color: i % 5 === 0 ? '#7b2fff' : i % 7 === 0 ? '#00ff9d' : '#00c8ff',
     }));
     setParticles(pts);
   }, []);
 
-  // Typewriter effect
+  const triggerGlitch = () => {
+    setGlitchActive(true);
+    setTimeout(() => setGlitchActive(false), 400);
+  };
+
   const typeText = (text) => {
     setTypedText("");
     if (typeIntervalRef.current) clearInterval(typeIntervalRef.current);
@@ -40,21 +116,51 @@ function App() {
       } else {
         clearInterval(typeIntervalRef.current);
       }
-    }, 12);
+    }, 10);
+  };
+
+  const handleFileUpload = async (event) => {
+    const file = event.target.files[0];
+    if (!file) return;
+    setIsUploading(true);
+    triggerGlitch();
+    typeText(`SYSTEM: Uploading ${file.name}... extracting neural pathways...`);
+    const formData = new FormData();
+    formData.append('file', file);
+    try {
+      await fetch('http://127.0.0.1:8000/api/upload', { method: 'POST', body: formData });
+      setIsUploading(false);
+      typeText('UPLOAD COMPLETE. Codebase ingested. Ready for indexing.');
+      fetchGraph();
+    } catch {
+      setIsUploading(false);
+      typeText('ERROR: Upload sequence failed. Check backend connection.');
+    }
   };
 
   const handleIndex = async () => {
     setIsIndexing(true);
-    typeText("Scanning codebase... vectorizing files... building neural index...");
+    triggerGlitch();
+    typeText('Scanning codebase... chunking files... embedding vectors... building neural index...');
     await fetch('http://127.0.0.1:8000/api/index', { method: 'POST' });
     setIsIndexing(false);
-    typeText("Neural index complete. All nodes are now queryable.");
+    fetchGraph();
+    typeText('NEURAL INDEX COMPLETE. All nodes are queryable. Click any node to begin analysis.');
   };
 
   const handleNodeClick = async (node) => {
     setActiveNode(node.id);
     setIsAnalyzing(true);
-    typeText(`Activating node: ${node.id}...`);
+    triggerGlitch();
+    typeText(`ACTIVATING NODE: ${node.id}...`);
+
+    const distance = 100;
+    const distRatio = 1 + distance / Math.hypot(node.x || 1, node.y || 1, node.z || 1);
+    fgRef.current?.cameraPosition(
+      { x: node.x * distRatio, y: node.y * distRatio, z: node.z * distRatio },
+      node,
+      1200
+    );
 
     const res = await fetch('http://127.0.0.1:8000/api/query', {
       method: 'POST',
@@ -66,624 +172,576 @@ function App() {
     typeText(data.response);
   };
 
+  const pyCount = graphData.nodes.filter(n => n.group === 1).length;
+  const jsCount = graphData.nodes.filter(n => n.group === 2).length;
+
   return (
     <>
       <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Rajdhani:wght@300;400;500;600;700&display=swap');
+        @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Orbitron:wght@400;600;700;900&family=Exo+2:wght@300;400;500&display=swap');
 
-        * { box-sizing: border-box; margin: 0; padding: 0; }
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
         :root {
-          --bg: #020408;
-          --panel: #050d14;
-          --border: rgba(0, 200, 255, 0.15);
-          --glow: #00c8ff;
-          --glow2: #7b2fff;
-          --glow3: #00ff9d;
-          --text: #8ab4c8;
-          --text-bright: #d4f0ff;
-          --danger: #ff4d6d;
-          --mono: 'Share Tech Mono', monospace;
-          --head: 'Rajdhani', sans-serif;
+          --bg:       #020609;
+          --panel:    #040c12;
+          --panel2:   #061018;
+          --border:   rgba(0,200,255,0.12);
+          --border2:  rgba(0,200,255,0.25);
+          --glow:     #00c8ff;
+          --glow2:    #7b2fff;
+          --glow3:    #00ff9d;
+          --warn:     #ffb830;
+          --text:     #7aa8be;
+          --text2:    #b0d4e8;
+          --bright:   #e0f6ff;
+          --mono:     'Share Tech Mono', monospace;
+          --display:  'Orbitron', sans-serif;
+          --body:     'Exo 2', sans-serif;
         }
 
-        body { background: var(--bg); overflow: hidden; }
+        html, body { height: 100%; overflow: hidden; background: var(--bg); }
 
+        /* ── BOOT SCREEN ── */
+        .boot-screen {
+          position: fixed; inset: 0; background: var(--bg);
+          display: flex; flex-direction: column;
+          align-items: center; justify-content: center;
+          z-index: 9999; transition: opacity 0.6s;
+          font-family: var(--mono); color: var(--glow3);
+          gap: 8px; padding: 40px;
+        }
+        .boot-screen.hidden { opacity: 0; pointer-events: none; }
+        .boot-logo {
+          font-family: var(--display); font-size: 32px; font-weight: 900;
+          color: var(--glow); letter-spacing: 6px;
+          text-shadow: 0 0 30px rgba(0,200,255,0.8), 0 0 60px rgba(0,200,255,0.3);
+          margin-bottom: 32px;
+        }
+        .boot-line { font-size: 11px; letter-spacing: 1px; opacity: 0; animation: fadeIn 0.3s forwards; }
+        @keyframes fadeIn { to { opacity: 1; } }
+        .boot-bar-wrap { width: 400px; height: 2px; background: rgba(0,200,255,0.1); margin-top: 24px; overflow: hidden; }
+        .boot-bar { height: 100%; background: var(--glow); animation: bootFill 2s ease-out forwards; }
+        @keyframes bootFill { from { width: 0; } to { width: 100%; } }
+
+        /* ── SHELL ── */
         .app-shell {
-          height: 100vh;
-          width: 100vw;
-          display: flex;
-          font-family: var(--head);
-          color: var(--text);
-          position: relative;
-          overflow: hidden;
+          height: 100vh; width: 100vw;
+          display: flex; font-family: var(--body);
+          color: var(--text); position: relative; overflow: hidden;
+          opacity: 0; transition: opacity 0.8s 0.3s;
         }
+        .app-shell.visible { opacity: 1; }
 
-        /* Animated grid background */
+        /* ── BACKGROUNDS ── */
         .grid-bg {
-          position: fixed;
-          inset: 0;
+          position: fixed; inset: 0; pointer-events: none; z-index: 0;
           background-image:
-            linear-gradient(rgba(0,200,255,0.03) 1px, transparent 1px),
-            linear-gradient(90deg, rgba(0,200,255,0.03) 1px, transparent 1px);
-          background-size: 40px 40px;
-          pointer-events: none;
-          z-index: 0;
+            linear-gradient(rgba(0,200,255,0.025) 1px, transparent 1px),
+            linear-gradient(90deg, rgba(0,200,255,0.025) 1px, transparent 1px);
+          background-size: 44px 44px;
         }
-
+        .vignette {
+          position: fixed; inset: 0; pointer-events: none; z-index: 0;
+          background: radial-gradient(ellipse at center, transparent 40%, rgba(0,0,0,0.7) 100%);
+        }
         .scanline {
-          position: fixed;
-          inset: 0;
-          background: linear-gradient(transparent 50%, rgba(0,0,0,0.03) 50%);
-          background-size: 100% 4px;
-          pointer-events: none;
-          z-index: 1;
-          opacity: 0.4;
+          position: fixed; inset: 0; pointer-events: none; z-index: 1;
+          background: repeating-linear-gradient(0deg, transparent, transparent 3px, rgba(0,0,0,0.04) 3px, rgba(0,0,0,0.04) 4px);
         }
-
-        /* Floating particles */
         .particle {
-          position: fixed;
-          border-radius: 50%;
-          background: var(--glow);
-          opacity: 0.4;
-          pointer-events: none;
-          z-index: 0;
+          position: fixed; border-radius: 50%; pointer-events: none; z-index: 0;
           animation: floatUp linear infinite;
         }
-
         @keyframes floatUp {
-          0% { transform: translateY(100vh) scale(0); opacity: 0; }
-          10% { opacity: 0.4; }
-          90% { opacity: 0.2; }
-          100% { transform: translateY(-20vh) scale(1); opacity: 0; }
+          0%   { transform: translateY(105vh) scale(0); opacity: 0; }
+          8%   { opacity: 0.5; }
+          92%  { opacity: 0.2; }
+          100% { transform: translateY(-10vh) scale(1.2); opacity: 0; }
         }
 
-        /* SIDEBAR */
+        /* ── GLITCH OVERLAY ── */
+        .glitch-overlay {
+          position: fixed; inset: 0; pointer-events: none; z-index: 100;
+          opacity: 0; transition: opacity 0.05s;
+        }
+        .glitch-overlay.active {
+          opacity: 1;
+          background: linear-gradient(
+            transparent 30%,
+            rgba(0,200,255,0.04) 30%, rgba(0,200,255,0.04) 31%,
+            transparent 31%,
+            transparent 60%,
+            rgba(123,47,255,0.04) 60%, rgba(123,47,255,0.04) 61%,
+            transparent 61%
+          );
+          animation: glitchFlash 0.4s steps(2) forwards;
+        }
+        @keyframes glitchFlash {
+          0%,100% { opacity: 0; }
+          20%,60% { opacity: 1; }
+        }
+
+        /* ── SIDEBAR ── */
         .sidebar {
-          width: 380px;
-          min-width: 380px;
+          width: 360px; min-width: 360px;
           background: var(--panel);
-          border-right: 1px solid var(--border);
-          display: flex;
-          flex-direction: column;
-          z-index: 10;
-          position: relative;
-          overflow: hidden;
+          border-right: 1px solid var(--border2);
+          display: flex; flex-direction: column;
+          z-index: 10; position: relative; overflow: hidden;
         }
 
-        .sidebar::before {
-          content: '';
-          position: absolute;
-          top: 0; left: 0; right: 0;
-          height: 1px;
+        /* Top sweep line */
+        .sidebar::after {
+          content: ''; position: absolute; top: 0; left: -100%; right: 100%; height: 1px;
           background: linear-gradient(90deg, transparent, var(--glow), transparent);
-          animation: scanH 3s linear infinite;
+          animation: sweepLine 4s linear infinite;
+        }
+        @keyframes sweepLine {
+          0%   { left: -100%; right: 100%; }
+          100% { left: 100%;  right: -100%; }
         }
 
-        @keyframes scanH {
-          0% { transform: translateX(-100%); }
-          100% { transform: translateX(100%); }
-        }
-
+        /* ── HEADER ── */
         .sidebar-header {
-          padding: 28px 24px 20px;
+          padding: 22px 20px 18px;
           border-bottom: 1px solid var(--border);
+          background: linear-gradient(180deg, rgba(0,200,255,0.04) 0%, transparent 100%);
           position: relative;
         }
-
-        .logo-line {
-          display: flex;
-          align-items: center;
-          gap: 10px;
-          margin-bottom: 4px;
+        .header-top {
+          display: flex; align-items: center; justify-content: space-between;
+          margin-bottom: 6px;
         }
-
-        .logo-icon {
-          width: 28px;
-          height: 28px;
-          position: relative;
-        }
-
-        .logo-icon svg {
-          width: 100%;
-          height: 100%;
-        }
-
         .app-title {
-          font-size: 22px;
-          font-weight: 700;
-          letter-spacing: 3px;
-          text-transform: uppercase;
-          color: var(--glow);
-          text-shadow: 0 0 20px rgba(0,200,255,0.6);
+          font-family: var(--display); font-size: 17px; font-weight: 700;
+          letter-spacing: 4px; color: var(--glow);
+          text-shadow: 0 0 16px rgba(0,200,255,0.7);
         }
-
-        .app-subtitle {
-          font-family: var(--mono);
-          font-size: 10px;
-          letter-spacing: 2px;
-          color: rgba(0,200,255,0.4);
-          text-transform: uppercase;
-          margin-left: 38px;
-        }
-
-        .status-bar {
-          display: flex;
-          align-items: center;
-          gap: 6px;
-          margin-top: 12px;
-          font-family: var(--mono);
-          font-size: 10px;
-          color: var(--glow3);
+        .version-tag {
+          font-family: var(--mono); font-size: 9px; padding: 2px 7px;
+          border: 1px solid rgba(0,200,255,0.25); color: rgba(0,200,255,0.5);
           letter-spacing: 1px;
         }
-
-        .status-dot {
-          width: 6px;
-          height: 6px;
-          border-radius: 50%;
-          background: var(--glow3);
-          box-shadow: 0 0 8px var(--glow3);
-          animation: pulse 2s ease-in-out infinite;
+        .header-sub {
+          font-family: var(--mono); font-size: 9px; letter-spacing: 2px;
+          color: rgba(0,200,255,0.35); text-transform: uppercase; margin-bottom: 10px;
+        }
+        .status-row {
+          display: flex; align-items: center; justify-content: space-between;
+        }
+        .status-online {
+          display: flex; align-items: center; gap: 6px;
+          font-family: var(--mono); font-size: 9px; color: var(--glow3);
+          letter-spacing: 1px;
+        }
+        .dot {
+          width: 6px; height: 6px; border-radius: 50%;
+          background: var(--glow3); box-shadow: 0 0 8px var(--glow3);
+          animation: dotPulse 2s ease-in-out infinite;
+        }
+        @keyframes dotPulse { 50% { opacity: 0.3; transform: scale(0.7); } }
+        .clock {
+          font-family: var(--mono); font-size: 9px;
+          color: rgba(0,200,255,0.3); letter-spacing: 1px;
         }
 
-        @keyframes pulse {
-          0%, 100% { opacity: 1; transform: scale(1); }
-          50% { opacity: 0.4; transform: scale(0.8); }
-        }
-
-        /* Stats row */
+        /* ── STATS ── */
         .stats-row {
-          display: grid;
-          grid-template-columns: 1fr 1fr 1fr;
-          gap: 1px;
-          background: var(--border);
+          display: grid; grid-template-columns: 1fr 1fr 1fr;
           border-bottom: 1px solid var(--border);
         }
-
         .stat-cell {
-          background: var(--panel);
-          padding: 12px 16px;
-          text-align: center;
+          padding: 14px 10px; text-align: center; position: relative;
+          border-right: 1px solid var(--border);
         }
-
+        .stat-cell:last-child { border-right: none; }
+        .stat-cell::before {
+          content: ''; position: absolute; bottom: 0; left: 20%; right: 20%; height: 1px;
+          background: var(--glow); opacity: 0; transform: scaleX(0);
+          transition: opacity 0.3s, transform 0.3s;
+        }
+        .stat-cell:hover::before { opacity: 0.5; transform: scaleX(1); }
         .stat-value {
-          font-family: var(--mono);
-          font-size: 18px;
-          color: var(--glow);
-          text-shadow: 0 0 10px rgba(0,200,255,0.5);
-          display: block;
+          font-family: var(--display); font-size: 22px; font-weight: 700;
+          color: var(--glow); text-shadow: 0 0 12px rgba(0,200,255,0.5);
+          display: block; line-height: 1;
         }
-
         .stat-label {
-          font-size: 9px;
-          letter-spacing: 1.5px;
-          text-transform: uppercase;
-          color: rgba(138,180,200,0.5);
-          display: block;
-          margin-top: 2px;
+          font-family: var(--mono); font-size: 8px; letter-spacing: 2px;
+          text-transform: uppercase; color: rgba(138,180,200,0.4);
+          display: block; margin-top: 4px;
         }
 
-        /* Index button */
-        .index-btn {
-          margin: 20px 24px 0;
-          padding: 14px;
-          background: transparent;
-          border: 1px solid var(--glow);
-          color: var(--glow);
-          font-family: var(--head);
-          font-size: 13px;
-          font-weight: 600;
-          letter-spacing: 3px;
-          text-transform: uppercase;
-          cursor: pointer;
-          position: relative;
+        /* ── CONTROLS ── */
+        .controls { padding: 16px 20px; display: flex; flex-direction: column; gap: 10px; border-bottom: 1px solid var(--border); }
+
+        .upload-zone {
+          padding: 11px 14px; cursor: pointer;
+          background: rgba(123,47,255,0.05);
+          border: 1px dashed rgba(123,47,255,0.35);
+          color: rgba(123,47,255,0.8); font-family: var(--mono);
+          font-size: 10px; letter-spacing: 2px; text-transform: uppercase;
+          text-align: center; transition: all 0.25s; position: relative;
           overflow: hidden;
-          transition: all 0.3s;
-          clip-path: polygon(8px 0%, 100% 0%, calc(100% - 8px) 100%, 0% 100%);
+        }
+        .upload-zone::before {
+          content: ''; position: absolute; inset: 0;
+          background: rgba(123,47,255,0.08); transform: scaleX(0);
+          transform-origin: left; transition: transform 0.25s;
+        }
+        .upload-zone:hover::before { transform: scaleX(1); }
+        .upload-zone:hover {
+          border-color: rgba(123,47,255,0.7);
+          color: #b060ff;
+          box-shadow: 0 0 16px rgba(123,47,255,0.2);
         }
 
+        .index-btn {
+          padding: 13px; cursor: pointer;
+          background: transparent;
+          border: 1px solid var(--border2);
+          color: var(--glow); font-family: var(--display);
+          font-size: 11px; font-weight: 600;
+          letter-spacing: 3px; text-transform: uppercase;
+          position: relative; overflow: hidden; transition: all 0.25s;
+          clip-path: polygon(10px 0%, 100% 0%, calc(100% - 10px) 100%, 0% 100%);
+        }
         .index-btn::before {
-          content: '';
-          position: absolute;
-          inset: 0;
-          background: linear-gradient(135deg, rgba(0,200,255,0.1), transparent);
-          opacity: 0;
-          transition: opacity 0.3s;
+          content: ''; position: absolute; inset: 0;
+          background: linear-gradient(90deg, rgba(0,200,255,0.08), transparent);
+          transform: translateX(-100%); transition: transform 0.4s;
         }
-
-        .index-btn:hover::before { opacity: 1; }
+        .index-btn:hover::before { transform: translateX(0); }
         .index-btn:hover {
-          box-shadow: 0 0 20px rgba(0,200,255,0.3), inset 0 0 20px rgba(0,200,255,0.05);
-          text-shadow: 0 0 10px rgba(0,200,255,0.8);
+          border-color: var(--glow);
+          box-shadow: 0 0 20px rgba(0,200,255,0.25), inset 0 0 12px rgba(0,200,255,0.05);
+          text-shadow: 0 0 10px rgba(0,200,255,0.9);
         }
-
+        .index-btn:disabled { opacity: 0.5; cursor: not-allowed; }
         .index-btn.loading {
-          border-color: var(--glow2);
-          color: var(--glow2);
-          animation: borderPulse 1s ease-in-out infinite;
+          border-color: rgba(0,200,255,0.4); color: rgba(0,200,255,0.6);
+          animation: loadPulse 1.2s ease-in-out infinite;
         }
-
-        @keyframes borderPulse {
-          0%, 100% { box-shadow: 0 0 5px rgba(123,47,255,0.3); }
-          50% { box-shadow: 0 0 20px rgba(123,47,255,0.6); }
+        @keyframes loadPulse {
+          0%,100% { box-shadow: 0 0 8px rgba(0,200,255,0.1); }
+          50%      { box-shadow: 0 0 24px rgba(0,200,255,0.4); }
         }
-
-        .btn-progress {
-          position: absolute;
-          bottom: 0; left: 0;
-          height: 2px;
-          background: var(--glow2);
-          animation: progress 2s ease-in-out infinite;
+        .progress-bar {
+          position: absolute; bottom: 0; left: 0; height: 2px;
+          background: linear-gradient(90deg, var(--glow2), var(--glow));
+          animation: progAnim 2s ease-in-out infinite;
         }
+        @keyframes progAnim { 0% { width:0; } 60% { width:75%; } 100% { width:100%; } }
 
-        @keyframes progress {
-          0% { width: 0%; }
-          50% { width: 70%; }
-          100% { width: 100%; }
-        }
-
-        /* Active node indicator */
-        .active-node {
-          margin: 16px 24px 0;
-          padding: 10px 14px;
-          background: rgba(0,200,255,0.05);
+        /* ── ACTIVE NODE ── */
+        .active-node-bar {
+          margin: 0 20px 0;
+          padding: 9px 12px;
+          background: rgba(0,200,255,0.04);
           border: 1px solid rgba(0,200,255,0.2);
           border-left: 3px solid var(--glow);
-          font-family: var(--mono);
-          font-size: 11px;
-          color: var(--glow);
-          display: flex;
-          align-items: center;
-          gap: 8px;
+          display: flex; align-items: center; gap: 8px;
+          font-family: var(--mono); font-size: 11px; color: var(--glow);
           overflow: hidden;
-          text-overflow: ellipsis;
-          white-space: nowrap;
+        }
+        .active-node-bar .arrow { color: rgba(0,200,255,0.4); flex-shrink: 0; }
+        .active-node-name {
+          flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+        }
+        .analyzing-pill {
+          flex-shrink: 0; font-size: 8px; padding: 2px 7px; letter-spacing: 1.5px;
+          background: rgba(0,200,255,0.1); border: 1px solid rgba(0,200,255,0.3);
+          animation: dotPulse 1s ease-in-out infinite;
         }
 
-        .node-arrow {
-          color: rgba(0,200,255,0.4);
+        /* ── AI PANEL ── */
+        .ai-panel {
+          flex: 1; margin: 12px 20px 20px;
+          border: 1px solid var(--border);
+          background: rgba(0,0,0,0.35);
+          display: flex; flex-direction: column;
+          overflow: hidden; position: relative;
+        }
+        .ai-panel::before, .ai-panel::after {
+          content: ''; position: absolute;
+          width: 10px; height: 10px; pointer-events: none;
+        }
+        .ai-panel::before {
+          top: -1px; left: -1px;
+          border-top: 2px solid var(--glow); border-left: 2px solid var(--glow);
+        }
+        .ai-panel::after {
+          bottom: -1px; right: -1px;
+          border-bottom: 2px solid var(--glow); border-right: 2px solid var(--glow);
+        }
+        .ai-header {
+          padding: 9px 14px; border-bottom: 1px solid var(--border);
+          background: rgba(0,200,255,0.03);
+          display: flex; align-items: center; justify-content: space-between;
           flex-shrink: 0;
         }
-
-        /* AI Output panel */
-        .ai-panel {
-          flex: 1;
-          margin: 16px 24px 24px;
-          border: 1px solid var(--border);
-          background: rgba(0,0,0,0.3);
-          display: flex;
-          flex-direction: column;
-          overflow: hidden;
-          position: relative;
+        .ai-title {
+          font-family: var(--mono); font-size: 9px;
+          letter-spacing: 2px; color: rgba(0,200,255,0.55);
+          display: flex; align-items: center; gap: 6px;
         }
-
-        .ai-panel-header {
-          padding: 10px 14px;
-          border-bottom: 1px solid var(--border);
-          display: flex;
-          align-items: center;
-          justify-content: space-between;
-          background: rgba(0,200,255,0.03);
-        }
-
-        .ai-panel-title {
-          font-family: var(--mono);
-          font-size: 10px;
-          letter-spacing: 2px;
-          text-transform: uppercase;
-          color: rgba(0,200,255,0.6);
-          display: flex;
-          align-items: center;
-          gap: 6px;
-        }
-
-        .analyzing-badge {
-          font-family: var(--mono);
-          font-size: 9px;
+        .ai-title-dot { color: var(--glow); }
+        .model-badge {
+          font-family: var(--mono); font-size: 8px; padding: 1px 6px;
+          border: 1px solid rgba(123,47,255,0.35); color: rgba(123,47,255,0.65);
           letter-spacing: 1px;
-          padding: 2px 8px;
-          background: rgba(123,47,255,0.2);
-          border: 1px solid rgba(123,47,255,0.4);
-          color: var(--glow2);
-          animation: badgePulse 1s ease-in-out infinite;
         }
-
-        @keyframes badgePulse {
-          0%, 100% { opacity: 1; }
-          50% { opacity: 0.5; }
-        }
-
         .ai-output {
-          flex: 1;
-          padding: 16px;
+          flex: 1; padding: 14px 16px;
           overflow-y: auto;
-          font-family: var(--mono);
-          font-size: 12px;
-          line-height: 1.8;
-          color: var(--text-bright);
-          scrollbar-width: thin;
-          scrollbar-color: rgba(0,200,255,0.2) transparent;
+          font-family: var(--mono); font-size: 11.5px; line-height: 1.9;
+          color: var(--text2);
+          scrollbar-width: thin; scrollbar-color: rgba(0,200,255,0.15) transparent;
         }
-
-        .ai-output::-webkit-scrollbar { width: 4px; }
-        .ai-output::-webkit-scrollbar-track { background: transparent; }
-        .ai-output::-webkit-scrollbar-thumb { background: rgba(0,200,255,0.2); border-radius: 2px; }
-
+        .ai-output::-webkit-scrollbar { width: 3px; }
+        .ai-output::-webkit-scrollbar-thumb { background: rgba(0,200,255,0.2); }
+        .placeholder { color: rgba(138,180,200,0.25); line-height: 2.2; }
+        .placeholder span { display: block; }
         .cursor {
-          display: inline-block;
-          width: 8px;
-          height: 14px;
-          background: var(--glow);
-          margin-left: 2px;
-          vertical-align: middle;
-          animation: blink 0.8s step-end infinite;
+          display: inline-block; width: 7px; height: 13px;
+          background: var(--glow); margin-left: 2px; vertical-align: middle;
+          box-shadow: 0 0 6px var(--glow);
+          animation: blink 0.75s step-end infinite;
         }
+        @keyframes blink { 50% { opacity: 0; } }
 
-        @keyframes blink {
-          0%, 100% { opacity: 1; }
-          50% { opacity: 0; }
-        }
+        /* ── GRAPH ── */
+        .graph-area { flex: 1; position: relative; overflow: hidden; }
 
-        .placeholder-text {
-          color: rgba(138,180,200,0.3);
-          font-style: italic;
-        }
-
-        /* Corner decorations */
-        .corner-tl, .corner-br {
-          position: absolute;
-          width: 12px;
-          height: 12px;
-          pointer-events: none;
-        }
-
-        .corner-tl {
-          top: -1px; left: -1px;
-          border-top: 2px solid var(--glow);
-          border-left: 2px solid var(--glow);
-        }
-
-        .corner-br {
-          bottom: -1px; right: -1px;
-          border-bottom: 2px solid var(--glow);
-          border-right: 2px solid var(--glow);
-        }
-
-        /* Graph area */
-        .graph-area {
-          flex: 1;
-          position: relative;
-          overflow: hidden;
-        }
-
-        /* HUD overlays */
-        .hud-top-right {
-          position: absolute;
-          top: 20px;
-          right: 20px;
-          z-index: 10;
-          display: flex;
-          flex-direction: column;
-          align-items: flex-end;
-          gap: 8px;
-        }
-
-        .hud-label {
-          font-family: var(--mono);
-          font-size: 9px;
-          letter-spacing: 2px;
-          color: rgba(0,200,255,0.3);
-          text-transform: uppercase;
-        }
-
-        .hud-value {
-          font-family: var(--mono);
-          font-size: 11px;
-          color: rgba(0,200,255,0.6);
-        }
-
-        .hud-bottom-left {
-          position: absolute;
-          bottom: 20px;
-          left: 20px;
-          z-index: 10;
-          font-family: var(--mono);
-          font-size: 9px;
-          color: rgba(0,200,255,0.2);
-          letter-spacing: 1px;
-          line-height: 1.8;
-        }
-
-        /* Cross-hair center */
-        .crosshair {
-          position: absolute;
-          top: 50%; left: 50%;
-          transform: translate(-50%, -50%);
-          width: 20px;
-          height: 20px;
-          pointer-events: none;
-          z-index: 5;
-          opacity: 0.15;
-        }
-
-        .crosshair::before, .crosshair::after {
-          content: '';
-          position: absolute;
-          background: var(--glow);
-        }
-
-        .crosshair::before {
-          width: 1px; height: 100%;
-          left: 50%; transform: translateX(-50%);
-        }
-
-        .crosshair::after {
-          height: 1px; width: 100%;
-          top: 50%; transform: translateY(-50%);
-        }
-
-        /* Node count badge */
-        .node-count {
-          position: absolute;
-          bottom: 20px;
-          right: 20px;
-          z-index: 10;
-          font-family: var(--mono);
-          font-size: 10px;
-          color: rgba(0,200,255,0.4);
-          letter-spacing: 1px;
-        }
-
-        /* Instruction hint */
-        .hint {
-          position: absolute;
-          top: 20px;
-          left: 50%;
+        .hud-top {
+          position: absolute; top: 18px; left: 50%;
           transform: translateX(-50%);
-          z-index: 10;
-          font-family: var(--mono);
-          font-size: 10px;
-          letter-spacing: 2px;
-          color: rgba(0,200,255,0.25);
-          text-transform: uppercase;
-          white-space: nowrap;
+          z-index: 10; font-family: var(--mono); font-size: 9px;
+          color: rgba(0,200,255,0.2); letter-spacing: 2.5px; text-transform: uppercase;
+          white-space: nowrap; pointer-events: none;
         }
+
+        .hud-tr {
+          position: absolute; top: 18px; right: 18px; z-index: 10;
+          font-family: var(--mono); font-size: 9px; line-height: 2;
+          color: rgba(0,200,255,0.25); text-align: right; pointer-events: none;
+        }
+        .hud-tr .hi { color: rgba(0,200,255,0.5); }
+
+        .hud-bl {
+          position: absolute; bottom: 18px; left: 18px; z-index: 10;
+          font-family: var(--mono); font-size: 8px; line-height: 2;
+          color: rgba(0,200,255,0.15); pointer-events: none; letter-spacing: 1px;
+        }
+
+        .hud-br {
+          position: absolute; bottom: 18px; right: 18px; z-index: 10;
+          font-family: var(--mono); font-size: 9px;
+          color: rgba(0,200,255,0.2); pointer-events: none; letter-spacing: 1px;
+        }
+
+        /* Corner brackets on graph */
+        .corner { position: absolute; width: 16px; height: 16px; z-index: 5; pointer-events: none; }
+        .corner.tl { top: 14px; left: 14px; border-top: 1px solid rgba(0,200,255,0.2); border-left: 1px solid rgba(0,200,255,0.2); }
+        .corner.tr { top: 14px; right: 14px; border-top: 1px solid rgba(0,200,255,0.2); border-right: 1px solid rgba(0,200,255,0.2); }
+        .corner.bl { bottom: 14px; left: 14px; border-bottom: 1px solid rgba(0,200,255,0.2); border-left: 1px solid rgba(0,200,255,0.2); }
+        .corner.br { bottom: 14px; right: 14px; border-bottom: 1px solid rgba(0,200,255,0.2); border-right: 1px solid rgba(0,200,255,0.2); }
+
+        .boot-lines-container {
+  width: 100%;
+  max-height: 250px; /* Adjust based on your logo/bar spacing */
+  overflow-y: auto;
+  margin: 20px 0;
+  display: flex;
+  flex-direction: column;
+  scrollbar-width: none;
+}
+
+.boot-lines-inner {
+  margin: 0 auto; /* Centers the block itself */
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start; /* Keeps the '>' symbols aligned vertically */
+  text-align: left; /* Standard terminal look */
+}
+
+.boot-line {
+  font-family: 'Courier New', Courier, monospace;
+  color: #13b9c5;
+  margin-bottom: 8px;
+  white-space: nowrap; /* Prevents lines from wrapping and breaking alignment */
+  opacity: 0;
+  transform: translateY(5px);
+  animation: lineIn 0.2s ease-out forwards;
+}
+
+@keyframes lineIn {
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
       `}</style>
 
-      <div className="app-shell">
+      {/* Boot screen */}
+      <div className={`boot-screen ${booted ? 'hidden' : ''}`}>
+  <div className="boot-logo">CODEBASE CARTOGRAPHER</div>
+  
+  <div className="boot-lines-container" ref={scrollRef}>
+    {/* This inner div ensures everything stays centered */}
+    <div className="boot-lines-inner">
+      {bootLines.map((l, i) => (
+        <div key={i} className="boot-line">
+          {l}
+        </div>
+      ))}
+    </div>
+  </div>
+
+  <div className="boot-bar-wrap">
+    <div className="boot-bar" />
+  </div>
+</div>
+
+
+      {/* Glitch overlay */}
+      <div className={`glitch-overlay ${glitchActive ? 'active' : ''}`} />
+
+      <div className={`app-shell ${booted ? 'visible' : ''}`}>
         <div className="grid-bg" />
+        <div className="vignette" />
         <div className="scanline" />
 
-        {/* Floating particles */}
         {particles.map(p => (
-          <div
-            key={p.id}
-            className="particle"
-            style={{
-              left: `${p.x}%`,
-              width: `${p.size}px`,
-              height: `${p.size}px`,
-              animationDuration: `${p.duration}s`,
-              animationDelay: `${p.delay}s`,
-            }}
-          />
+          <div key={p.id} className="particle" style={{
+            left: `${p.x}%`,
+            width: `${p.size}px`, height: `${p.size}px`,
+            background: p.color,
+            opacity: 0.35,
+            animationDuration: `${p.duration}s`,
+            animationDelay: `${p.delay}s`,
+          }} />
         ))}
 
-        {/* SIDEBAR */}
+        {/* ── SIDEBAR ── */}
         <div className="sidebar">
+
+          {/* Header */}
           <div className="sidebar-header">
-            <div className="logo-line">
-              <div className="logo-icon">
-                <svg viewBox="0 0 28 28" fill="none" xmlns="http://www.w3.org/2000/svg">
-                  <circle cx="14" cy="14" r="13" stroke="#00c8ff" strokeWidth="1" strokeOpacity="0.4"/>
-                  <circle cx="14" cy="14" r="3" fill="#00c8ff" opacity="0.8"/>
-                  <line x1="14" y1="1" x2="14" y2="8" stroke="#00c8ff" strokeWidth="1" strokeOpacity="0.6"/>
-                  <line x1="14" y1="20" x2="14" y2="27" stroke="#00c8ff" strokeWidth="1" strokeOpacity="0.6"/>
-                  <line x1="1" y1="14" x2="8" y2="14" stroke="#00c8ff" strokeWidth="1" strokeOpacity="0.6"/>
-                  <line x1="20" y1="14" x2="27" y2="14" stroke="#00c8ff" strokeWidth="1" strokeOpacity="0.6"/>
-                  <line x1="4" y1="4" x2="9" y2="9" stroke="#7b2fff" strokeWidth="1" strokeOpacity="0.5"/>
-                  <line x1="19" y1="19" x2="24" y2="24" stroke="#7b2fff" strokeWidth="1" strokeOpacity="0.5"/>
-                  <line x1="24" y1="4" x2="19" y2="9" stroke="#7b2fff" strokeWidth="1" strokeOpacity="0.5"/>
-                  <line x1="9" y1="19" x2="4" y2="24" stroke="#7b2fff" strokeWidth="1" strokeOpacity="0.5"/>
-                </svg>
-              </div>
+            <div className="header-top">
               <span className="app-title">CARTOGRAPHER</span>
+              <span className="version-tag">1.0</span>
             </div>
-            <div className="app-subtitle">neural code analysis v2.0</div>
-            <div className="status-bar">
-              <div className="status-dot" />
-              SYSTEM ONLINE — BACKEND CONNECTED
+            <div className="header-sub">neural code analysis system</div>
+            <div className="status-row">
+              <div className="status-online">
+                <div className="dot" /> SYSTEM ONLINE
+              </div>
+              <div className="clock">{clock}</div>
             </div>
           </div>
 
+          {/* Stats */}
           <div className="stats-row">
             <div className="stat-cell">
               <span className="stat-value">{graphData.nodes.length}</span>
-              <span className="stat-label">Nodes</span>
+              <span className="stat-label">Total</span>
             </div>
             <div className="stat-cell">
-              <span className="stat-value">{graphData.nodes.filter(n => n.group === 1).length}</span>
+              <span className="stat-value" style={{ color: 'var(--glow)' }}>{pyCount}</span>
               <span className="stat-label">Python</span>
             </div>
             <div className="stat-cell">
-              <span className="stat-value">{graphData.nodes.filter(n => n.group === 2).length}</span>
-              <span className="stat-label">Frontend</span>
+              <span className="stat-value" style={{ color: 'var(--glow2)' }}>{jsCount}</span>
+              <span className="stat-label">JS/JSX</span>
             </div>
           </div>
 
-          <button
-            className={`index-btn ${isIndexing ? 'loading' : ''}`}
-            onClick={handleIndex}
-            disabled={isIndexing}
-          >
-            {isIndexing ? '◈ INDEXING...' : '◈ SCAN & INDEX CODEBASE'}
-            {isIndexing && <div className="btn-progress" />}
-          </button>
+          {/* Controls */}
+          <div className="controls">
+            <input type="file" ref={fileInputRef} onChange={handleFileUpload} style={{ display: 'none' }} accept=".zip" />
+            <div className="upload-zone" onClick={() => fileInputRef.current.click()}>
+              {isUploading ? '⇪  UPLOADING...' : '⇪  UPLOAD CODEBASE  (.ZIP)'}
+            </div>
+            <button
+              className={`index-btn ${isIndexing ? 'loading' : ''}`}
+              onClick={handleIndex}
+              disabled={isIndexing || isUploading}
+            >
+              {isIndexing ? '◈  INDEXING CODEBASE...' : '◈  SCAN & INDEX'}
+              {isIndexing && <div className="progress-bar" />}
+            </button>
+          </div>
 
+          {/* Active node */}
           {activeNode && (
-            <div className="active-node">
-              <span className="node-arrow">▶</span>
-              {activeNode}
-              {isAnalyzing && <span style={{ marginLeft: 'auto', color: 'rgba(0,200,255,0.4)', animation: 'blink 0.8s step-end infinite' }}>●</span>}
+            <div className="active-node-bar" style={{ margin: '0 20px 12px' }}>
+              <span className="arrow">▶</span>
+              <span className="active-node-name">{activeNode}</span>
+              {isAnalyzing && <span className="analyzing-pill">ANALYZING</span>}
             </div>
           )}
 
+          {/* AI output */}
           <div className="ai-panel">
-            <div className="corner-tl" />
-            <div className="corner-br" />
-            <div className="ai-panel-header">
-              <div className="ai-panel-title">
-                <span>◆</span> AI NEURAL OUTPUT
+            <div className="ai-header">
+              <div className="ai-title">
+                <span className="ai-title-dot">◆</span> NEURAL OUTPUT
               </div>
-              {isAnalyzing && <div className="analyzing-badge">PROCESSING</div>}
+              <div className="model-badge">LLAMA-3.3-70B</div>
             </div>
-            <div className="ai-output">
+            <div className="ai-output" ref={outputRef}>
               {typedText ? (
-                <>
-                  {typedText}
-                  <span className="cursor" />
-                </>
+                <>{typedText}<span className="cursor" /></>
               ) : (
-                <span className="placeholder-text">
-                  &gt; awaiting node selection...<br />
-                  &gt; click any node in the graph<br />
-                  &gt; to begin neural analysis
-                </span>
+                <div className="placeholder">
+                  <span>&gt; awaiting node selection...</span>
+                  <span>&gt; click any node to begin analysis</span>
+                  <span style={{ marginTop: '8px', color: 'rgba(0,200,255,0.12)' }}>&gt; use scan &amp; index first</span>
+                </div>
               )}
             </div>
           </div>
         </div>
 
-        {/* GRAPH */}
+        {/* ── GRAPH ── */}
         <div className="graph-area">
-          <div className="crosshair" />
-          <div className="hint">DRAG TO ROTATE · SCROLL TO ZOOM · CLICK NODE TO ANALYZE</div>
-          <div className="hud-top-right">
-            <div className="hud-label">render mode</div>
-            <div className="hud-value">3D FORCE GRAPH</div>
-            <div className="hud-label" style={{ marginTop: '8px' }}>engine</div>
-            <div className="hud-value">GROQ LLAMA-3.3</div>
+          <div className="corner tl" /><div className="corner tr" />
+          <div className="corner bl" /><div className="corner br" />
+
+          <div className="hud-top">3D NEURAL MAP — DRAG · SCROLL · CLICK</div>
+
+          <div className="hud-tr">
+            <div><span className="hi">ENGINE</span> GROQ / LLAMA-3.3</div>
+            <div><span className="hi">EMBED</span> GEMINI-001</div>
+            <div><span className="hi">DATABASE</span> CHROMADB</div>
           </div>
-          <div className="hud-bottom-left">
-            SYS://CODE-CARTOGRAPHER/NEURAL-GRAPH<br />
-            BUILD: 2025.05 — GROQ + GEMINI EMBEDDINGS
+
+          <div className="hud-bl">
+            SYS://CARTOGRAPHER/NEURAL-GRAPH<br />
+            RENDER: 3D-FORCE-GRAPH — WebGL
           </div>
-          <div className="node-count">
+
+          <div className="hud-br">
             {graphData.nodes.length} NODES MAPPED
           </div>
+
           <ForceGraph3D
+            ref={fgRef}
             graphData={graphData}
-            nodeAutoColorBy="group"
             nodeLabel="id"
             onNodeClick={handleNodeClick}
-            backgroundColor="#020408"
+            backgroundColor="#020609"
+            nodeRelSize={7}
             nodeColor={node => node.group === 1 ? '#00c8ff' : '#7b2fff'}
-            linkColor={() => 'rgba(0,200,255,0.15)'}
-            nodeOpacity={0.9}
-            linkOpacity={0.3}
-            nodeRelSize={5}
+            nodeOpacity={0.92}
+            linkColor={() => 'rgba(0,200,255,0.18)'}
+            linkWidth={0.8}
+            linkDirectionalParticles={3}
+            linkDirectionalParticleWidth={1.5}
+            linkDirectionalParticleSpeed={0.004}
+            linkDirectionalParticleColor={() => '#00ffcc'}
           />
         </div>
       </div>

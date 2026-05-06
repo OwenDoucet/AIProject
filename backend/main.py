@@ -1,30 +1,32 @@
 import os
+import shutil
+import zipfile
+import time
+import re
+import gc
+import uuid
+import chromadb
+import traceback
+from pathlib import Path
 from dotenv import load_dotenv
 
-# Load env variables FIRST before anything else
 load_dotenv()
 
-from fastapi import FastAPI
+from fastapi import FastAPI, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, SecretStr
 
-# LangChain Imports
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from langchain_groq import ChatGroq
 from langchain_chroma import Chroma
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_classic.chains.combine_documents import create_stuff_documents_chain
-from langchain_classic.chains import create_retrieval_chain
-from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.documents import Document
 
-# Google API Key (for embeddings only)
-raw_google_key = os.getenv("GOOGLE_API_KEY")
-assert raw_google_key is not None, "GOOGLE_API_KEY not found in environment variables"
+# API Keys
+raw_google_key = os.getenv("GOOGLE_API_KEY", "")
 google_api_key: SecretStr = SecretStr(raw_google_key)
 
-# Groq API Key (for chat/generation)
-raw_groq_key = os.getenv("GROQ_API_KEY")
-assert raw_groq_key is not None, "GROQ_API_KEY not found in environment variables"
+raw_groq_key = os.getenv("GROQ_API_KEY", "")
 groq_api_key: SecretStr = SecretStr(raw_groq_key)
 
 app = FastAPI()
@@ -37,93 +39,165 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-CHROMA_PATH = "./chroma_db"
+BASE_DIR = Path(__file__).resolve().parent
+UPLOAD_DIR = BASE_DIR / "uploaded_projects"
+UPLOAD_DIR.mkdir(exist_ok=True)
 
-# Gemini Embeddings (free tier for embeddings)
+# Using the most efficient model found in your terminal check
 embeddings = GoogleGenerativeAIEmbeddings(
-    model="models/gemini-embedding-001",
-    api_key=google_api_key
+    model="models/gemini-embedding-2",
+    api_key=google_api_key,
+    task_type="retrieval_document" 
 )
 
 class QueryRequest(BaseModel):
     text: str
 
+@app.post("/api/upload")
+async def upload_codebase(file: UploadFile = File(...)):
+    try:
+        gc.collect()
+        if UPLOAD_DIR.exists():
+            shutil.rmtree(UPLOAD_DIR)
+        UPLOAD_DIR.mkdir()
+
+        for old_folder in BASE_DIR.glob("chroma_db_*"):
+            shutil.rmtree(old_folder, ignore_errors=True)
+        
+        zip_path = UPLOAD_DIR / "project.zip"
+        with open(zip_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+
+        with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+            zip_ref.extractall(UPLOAD_DIR)
+            
+        return {"message": "Project uploaded."}
+    except Exception as e:
+        return {"message": f"Upload error: {str(e)}"}
+
 @app.get("/api/graph")
 async def get_graph():
-    """Scans local directory for files to display in the 3D graph."""
-    nodes = []
-    links = []
-    ignore = {"node_modules", "venv", "chroma_db", "__pycache__", ".git", "dist"}
+    nodes, links, file_map = [], [], {}
+    ignore = {"node_modules", "venv", "__pycache__", ".git", "dist", "project.zip"}
+    if not UPLOAD_DIR.exists(): return {"nodes": [], "links": []}
 
-    for root, dirs, files in os.walk("."):
-        dirs[:] = [d for d in dirs if d not in ignore]
-        for file in files:
-            if file.endswith(('.py', '.jsx', '.js', '.css', '.html')):
-                nodes.append({
-                    "id": file,
-                    "group": 1 if file.endswith('.py') else 2
-                })
-    return {"nodes": nodes, "links": links}
+    try:
+        for root, dirs, files in os.walk(UPLOAD_DIR):
+            dirs[:] = [d for d in dirs if d not in ignore]
+            for file in files:
+                if file.endswith(('.py', '.jsx', '.js', '.tsx')):
+                    file_id = file
+                    file_map[file_id] = os.path.join(root, file)
+                    nodes.append({"id": file_id, "group": 1 if file.endswith('.py') else 2})
+
+        for file_id, full_path in file_map.items():
+            with open(full_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+                for other_file in file_map.keys():
+                    if file_id == other_file: continue
+                    base_name = os.path.splitext(other_file)[0]
+                    if re.search(f"['\"/]{base_name}['\"]", content) or f"import {base_name}" in content:
+                        links.append({"source": file_id, "target": other_file, "value": 1})
+        return {"nodes": nodes, "links": links}
+    except Exception:
+        return {"nodes": [], "links": []}
 
 @app.post("/api/index")
 async def index_codebase():
-    """Converts code into vectors and stores them in ChromaDB using Gemini embeddings."""
-    documents = []
-    ignore = {"node_modules", "venv", "chroma_db", "__pycache__", ".git", "dist"}
+    try:
+        gc.collect()
+        for folder in BASE_DIR.glob("chroma_db_*"):
+            shutil.rmtree(folder, ignore_errors=True)
+        
+        time.sleep(1.0)
+        unique_id = uuid.uuid4().hex[:8]
+        new_path = BASE_DIR / f"chroma_db_{unique_id}"
+        new_path.mkdir(exist_ok=True)
 
-    for root, dirs, files in os.walk("."):
-        dirs[:] = [d for d in dirs if d not in ignore]
-        for file in files:
-            if file.endswith(('.py', '.jsx')):
-                path = os.path.join(root, file)
-                try:
-                    with open(path, 'r', encoding='utf-8') as f:
-                        content = f.read()
-                        documents.append(f"FILE: {file}\nCONTENT:\n{content}")
-                except Exception as e:
-                    print(f"Could not read {file}: {e}")
+        documents = []
+        ignore = {"node_modules", "venv", "__pycache__", ".git", "dist", "project.zip"}
 
-    splitter = RecursiveCharacterTextSplitter(chunk_size=2000, chunk_overlap=200)
-    texts = splitter.create_documents(documents)
+        for root, dirs, files in os.walk(UPLOAD_DIR):
+            dirs[:] = [d for d in dirs if d not in ignore]
+            for file in files:
+                if file.endswith(('.py', '.jsx', '.js', '.tsx')):
+                    try:
+                        with open(os.path.join(root, file), 'r', encoding='utf-8') as f:
+                            text_content = f.read().strip()
+                            if text_content:
+                                documents.append(Document(page_content=text_content, metadata={"source": file}))
+                    except: continue
 
-    Chroma.from_documents(
-        texts,
-        embeddings,
-        persist_directory=CHROMA_PATH,
-        collection_name="code_index"
-    )
-    return {"message": "Codebase successfully indexed!"}
+        if not documents: return {"message": "No valid files found."}
+
+        text_splitter = RecursiveCharacterTextSplitter(chunk_size=2000, chunk_overlap=200)
+        split_docs = text_splitter.split_documents(documents)
+        safe_docs = [d for d in split_docs if d.page_content.strip()]
+
+        client = chromadb.PersistentClient(path=str(new_path))
+        
+        # We manually initialize the collection to avoid LangChain's 'from_documents'
+        collection = client.get_or_create_collection(name="code_index")
+        
+        chunks_indexed = 0
+        LIMIT_CHUNKS = 30 
+
+        for doc in safe_docs:
+            if chunks_indexed >= LIMIT_CHUNKS:
+                break
+
+            # MANUALLY generate the embedding to bypass the library bug
+            # This is the "Nuke" fix.
+            vector = embeddings.embed_query(doc.page_content)
+            
+            collection.add(
+                ids=[str(uuid.uuid4())],
+                embeddings=[vector],
+                metadatas=[doc.metadata],
+                documents=[doc.page_content]
+            )
+            
+            chunks_indexed += 1
+            print(f"Indexed {chunks_indexed}/{LIMIT_CHUNKS}: {doc.metadata['source']}")
+            time.sleep(0.5) 
+
+        gc.collect()
+        return {"message": f"Successfully indexed {chunks_indexed} chunks manually."}
+    except Exception as e:
+        print(traceback.format_exc())
+        return {"message": f"Index failed: {str(e)}"}
 
 @app.post("/api/query")
 async def ask_ai(request: QueryRequest):
-    """Retrieves code context and runs the AI generation chain using Groq."""
-    vectorstore = Chroma(
-        persist_directory=CHROMA_PATH,
-        embedding_function=embeddings,
-        collection_name="code_index"
-    )
+    chroma_folders = sorted(list(BASE_DIR.glob("chroma_db_*")), key=os.path.getmtime, reverse=True)
+    if not chroma_folders:
+        return {"response": "⚠️ Please click 'SCAN & INDEX' first."}
 
-    # Groq for fast, free chat generation
-    llm = ChatGroq(
-        model="llama-3.3-70b-versatile",
-        temperature=0,
-        api_key=groq_api_key
-    )
+    active_path = chroma_folders[0]
+    
+    try:
+        client = chromadb.PersistentClient(path=str(active_path))
+        vectorstore = Chroma(client=client, embedding_function=embeddings, collection_name="code_index")
 
-    prompt = ChatPromptTemplate.from_template("""
-    You are a Senior AI Engineer. Use the provided code context to answer the user's question.
-    If the answer isn't in the context, say you don't know based on the current files.
+        relevant_docs = vectorstore.similarity_search(request.text, k=1)
+        context_text = relevant_docs[0].page_content if relevant_docs else "No context found."
 
-    Context:
-    {context}
+        llm = ChatGroq(model="llama-3.3-70b-versatile", temperature=0, api_key=groq_api_key)
 
-    Question: {input}
+        prompt = f"""
+        Role: Friendly Guide. 
+        Context: {context_text}
+        Question: {request.text}
 
-    Answer:""")
+        Task:
+        1. Write one sentence explaining what this file does (analogy).
+        2. Write one sentence starting exactly with "Connected to [names of other files] for [simple explanation of why]."
+        """
 
-    combine_docs_chain = create_stuff_documents_chain(llm, prompt)
-    retrieval_chain = create_retrieval_chain(vectorstore.as_retriever(), combine_docs_chain)
-
-    result = retrieval_chain.invoke({"input": request.text})
-
-    return {"response": result["answer"]}
+        response = llm.invoke(prompt)
+        return {"response": str(response.content).strip()}
+        
+    except Exception as e:
+        return {"response": f"Error: {str(e)}"}
+    finally:
+        gc.collect()
