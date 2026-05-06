@@ -31,7 +31,7 @@ groq_api_key: SecretStr = SecretStr(raw_groq_key)
 
 app = FastAPI()
 
-# Cloud-ready CORS: Allow all origins for the demo
+# Cloud CORS: Allows your frontend to talk to this backend
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"], 
@@ -40,13 +40,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Render Persistence Logic: Use /data if STORAGE_DIR is set, otherwise use local path
-STORAGE_PATH = os.getenv("STORAGE_DIR", str(Path(__file__).resolve().parent))
-BASE_DIR = Path(STORAGE_PATH)
+# RENDER FREE STORAGE: Writes to the local 'backend' folder on the server
+# Note: Data resets when the server sleeps or redeploys
+BASE_DIR = Path(__file__).resolve().parent
 UPLOAD_DIR = BASE_DIR / "uploaded_projects"
-UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+UPLOAD_DIR.mkdir(exist_ok=True)
 
-# Optimized Gemini Model
+# Initialize Gemini Embeddings
 embeddings = GoogleGenerativeAIEmbeddings(
     model="models/gemini-embedding-2",
     api_key=google_api_key,
@@ -57,17 +57,19 @@ class QueryRequest(BaseModel):
     text: str
 
 @app.get("/")
-async def health_check():
-    return {"status": "Backend is live", "storage": str(BASE_DIR)}
+async def health():
+    return {"status": "Backend is online", "mode": "Render Free"}
 
 @app.post("/api/upload")
 async def upload_codebase(file: UploadFile = File(...)):
     try:
         gc.collect()
+        # Clean up existing uploads to save space
         if UPLOAD_DIR.exists():
             shutil.rmtree(UPLOAD_DIR)
-        UPLOAD_DIR.mkdir(parents=True)
+        UPLOAD_DIR.mkdir()
 
+        # Clean up old DB folders
         for old_folder in BASE_DIR.glob("chroma_db_*"):
             shutil.rmtree(old_folder, ignore_errors=True)
         
@@ -78,7 +80,7 @@ async def upload_codebase(file: UploadFile = File(...)):
         with zipfile.ZipFile(zip_path, 'r') as zip_ref:
             zip_ref.extractall(UPLOAD_DIR)
             
-        return {"message": "Project uploaded successfully."}
+        return {"message": "Upload successful!"}
     except Exception as e:
         return {"message": f"Upload error: {str(e)}"}
 
@@ -119,7 +121,7 @@ async def index_codebase():
         time.sleep(0.5)
         unique_id = uuid.uuid4().hex[:8]
         new_path = BASE_DIR / f"chroma_db_{unique_id}"
-        new_path.mkdir(parents=True, exist_ok=True)
+        new_path.mkdir(exist_ok=True)
 
         documents = []
         ignore = {"node_modules", "venv", "__pycache__", ".git", "dist", "project.zip"}
@@ -135,9 +137,9 @@ async def index_codebase():
                                 documents.append(Document(page_content=text_content, metadata={"source": file}))
                     except: continue
 
-        if not documents: return {"message": "No valid files found."}
+        if not documents: return {"message": "No files to index."}
 
-        # Large chunks = fewer packages to index = faster speed
+        # Optimized chunking for speed
         text_splitter = RecursiveCharacterTextSplitter(chunk_size=6000, chunk_overlap=200)
         split_docs = text_splitter.split_documents(documents)
         safe_docs = [d for d in split_docs if d.page_content.strip()]
@@ -146,13 +148,13 @@ async def index_codebase():
         collection = client.get_or_create_collection(name="code_index")
         
         chunks_indexed = 0
-        LIMIT_CHUNKS = 10 # Speed limit for snappy indexing
+        LIMIT_CHUNKS = 10 # Lightning fast scan
 
         for doc in safe_docs:
             if chunks_indexed >= LIMIT_CHUNKS:
                 break
 
-            # Manual embedding generation to prevent the IndexError bug
+            # Bypasses the IndexError bug in LangChain-Chroma
             vector = embeddings.embed_query(doc.page_content)
             
             collection.add(
@@ -163,11 +165,11 @@ async def index_codebase():
             )
             
             chunks_indexed += 1
-            print(f"Indexed {chunks_indexed}/{LIMIT_CHUNKS}: {doc.metadata['source']}")
+            print(f"Indexed {chunks_indexed}: {doc.metadata['source']}")
             time.sleep(0.2) 
 
         gc.collect()
-        return {"message": f"Quick scan complete: {chunks_indexed} chunks indexed."}
+        return {"message": f"Scan complete. Indexed {chunks_indexed} chunks."}
     except Exception as e:
         print(traceback.format_exc())
         return {"message": f"Index failed: {str(e)}"}
@@ -176,7 +178,7 @@ async def index_codebase():
 async def ask_ai(request: QueryRequest):
     chroma_folders = sorted(list(BASE_DIR.glob("chroma_db_*")), key=os.path.getmtime, reverse=True)
     if not chroma_folders:
-        return {"response": "⚠️ Please click 'SCAN & INDEX' first."}
+        return {"response": "⚠️ Please upload and index a project first."}
 
     active_path = chroma_folders[0]
     
