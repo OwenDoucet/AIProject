@@ -741,7 +741,7 @@ useEffect(() => {
             linkDirectionalParticles={3}
             linkDirectionalParticleWidth={1.5}
             linkDirectionalParticleSpeed={0.004}
-            linkDirectionalParticleColor={() => '#00ffcc'}
+            linkDirectionalParticleColor={() => '#ffffff'}
           />
         </div>
       </div>
